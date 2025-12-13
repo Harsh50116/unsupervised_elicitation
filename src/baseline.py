@@ -5,7 +5,9 @@ from setup import load_truthfulqa, setup_hyperbolic_client, format_truthfulqa_ex
 def zero_shot_eval(client, test_data, model):
     correct = 0
 
+
     for example in test_data:
+        print("-", end=" ", flush=True) 
         prompt = format_truthfulqa_example(example['question'], example['choice'])
         response = client.completions.create(
             model=model,
@@ -21,8 +23,8 @@ def zero_shot_eval(client, test_data, model):
         if prediction_label == example['label']:
             correct += 1
         
-        accuracy = correct / len(test_data) * 100
-        return accuracy
+    accuracy = correct / len(test_data) * 100
+    return accuracy
 
 
 # Few shot evaluations
@@ -34,13 +36,14 @@ def few_shot_eval(client, train_data, test_data, n_examples, model):
         context += format_truthfulqa_example(ex['question'], ex['choice'], ex['label'])
         context += "\n"
 
-    for c in context_examples:
-        print(c)
-        print("-" * 100)
+    # for c in context_examples:
+    #     print(c)
+    #     print("-" * 100)
     
     correct = 0
 
     for example in test_data:
+        print("-", end=" ", flush=True)
         prompt = context + format_truthfulqa_example(example['question'], example['choice'])
         response = client.completions.create(
             model=model,
@@ -56,9 +59,8 @@ def few_shot_eval(client, train_data, test_data, n_examples, model):
         if prediction_label == example['label']:
             correct += 1 
         
-        accuracy = correct / len(test_data) * 100
-        return accuracy
-
+    accuracy = correct / len(test_data) * 100
+    return accuracy
 
 
 
