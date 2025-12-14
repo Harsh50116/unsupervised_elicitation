@@ -5,16 +5,19 @@ from setup import load_truthfulqa, setup_hyperbolic_client, format_truthfulqa_ex
 
 
 
-def calculate_mutual_predictability(client, labeled_data, model="meta-llama/Meta-Llama-3.1-405B"):
+def calculate_mutual_predictability(client, labeled_data, model="meta-llama/Meta-Llama-3.1-405B", context_size=20):
     """ Calculate the log probabilities of the labeled data """
     total_score = 0.0 
 
     for i, target in enumerate(labeled_data):
+
+        other_examples = [ex for j, ex in enumerate(labeled_data) if i!=j] 
+        context_examples = random.sample(other_examples, min(context_size, len(other_examples)))
+
         context = ""
-        for j, ex in enumerate(labeled_data):
-            if i != j:
-                context += format_truthfulqa_example(ex['question'], ex['choice'], ex['label'])
-                context += "\n"
+        for ex in context_examples:
+            context += format_truthfulqa_example(ex['question'], ex['choice'], ex['label'])
+            context += "\n"
         
         # Prompting without answer 
         prompt = context + format_truthfulqa_example(target['question'], target['choice'])
@@ -33,6 +36,7 @@ def calculate_mutual_predictability(client, labeled_data, model="meta-llama/Meta
 
         label_logprob = -10.0  
         for token, logprob in top_logprobs.items():
+            # print(token + " : " + str(logprob))
             if actual_label.lower() in token.lower():
                 label_logprob = logprob 
                 break 
@@ -49,25 +53,29 @@ def calculate_inconsistency(labeled_data):
     return 10 if all_same else 0
 
 
-def calculate_score(client, labeled_data, alpha=50):
+def calculate_score(client, labeled_data, alpha=50, context_size=20):
     """formula:
         U(D) = alpha * P_B(D) - I(D)  
     """
-    mutual = calculate_mutual_predictability(client, labeled_data)
+    mutual = calculate_mutual_predictability(client, labeled_data, context_size=context_size)
     inconsist = calculate_inconsistency(labeled_data)
     return alpha * mutual - inconsist 
 
 
-def propose_label(client, example, context_examples, model="meta-llama/Meta-Llama-3.1-405B"):
+def propose_label(client, example, context_examples, model="meta-llama/Meta-Llama-3.1-405B", context_size=20):
     """
     Args: 
         client: The client to use to make API calls.
         example: The example to label.
         context_examples: The context examples to use to label the example.
         model: The model to use to make API calls.
+        context_size: The number of context examples to use to label the example.
     """
+
+    sampled_context = random.sample(context_examples, min(context_size, len(context_examples)))
+
     context = ""
-    for ex in context_examples:
+    for ex in sampled_context:
         context += format_truthfulqa_example(ex['question'], ex['choice'], ex['label'])
         context += "\n"
 
@@ -81,13 +89,18 @@ def propose_label(client, example, context_examples, model="meta-llama/Meta-Llam
         logprobs=5
     )
 
-    # Pick label woth highes probability 
+    # Pick label with highes probability 
     top_logprobs = response.choices[0].logprobs.top_logprobs[0] 
+
+    # print(response.choices[0].logprobs)
+
+    # print("-" * 100)
 
     best_label = None 
     best_logprob = -float('inf')
 
     for token, logprob in top_logprobs.items():
+        # print(token + " : " + str(logprob))
         if 'true' in token.lower():
             if logprob > best_logprob:
                 best_label = 1
@@ -96,6 +109,8 @@ def propose_label(client, example, context_examples, model="meta-llama/Meta-Llam
             if logprob > best_logprob:
                 best_label = 0
                 best_logprob = logprob 
+    
+    # print("-" * 100)
     
     if best_label is None:
         best_label = random.choice([0, 1])
@@ -153,7 +168,7 @@ def run_icm(client, unlabeled_data, K=8, max_iterations=256, model="meta-llama/M
         
         # Propose label 
         context = [ex for ex in labeled_data if ex != example]
-        proposed_label = propose_label(client, example, context, model)
+        proposed_label = propose_label(client, example, context, model, context_size=20)
 
         # Create new dataset with proposed label 
         if is_new:
@@ -164,8 +179,8 @@ def run_icm(client, unlabeled_data, K=8, max_iterations=256, model="meta-llama/M
         
 
         # Calculate scores 
-        old_score = calculate_score(client, labeled_data) 
-        new_score = calculate_score(client, new_labeled)
+        old_score = calculate_score(client, labeled_data, context_size=20) 
+        new_score = calculate_score(client, new_labeled, context_size=20)
         delta = new_score - old_score 
 
         if delta > 0 or random.random() < math.exp(delta / T):
@@ -201,7 +216,7 @@ def main():
         client,
         train_data,
         K=8,
-        max_iterations=256,
+        max_iterations=1,
         model="meta-llama/Meta-Llama-3.1-405B"
         )
 
