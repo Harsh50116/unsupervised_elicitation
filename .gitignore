@@ -39,3 +39,7 @@ env/
 # Data
 data/
 
+# ThoughtProcess 
+.txt/
+.brainstorm.txt
+
