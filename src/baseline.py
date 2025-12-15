@@ -5,7 +5,6 @@ from setup import load_truthfulqa, setup_hyperbolic_client, format_truthfulqa_ex
 def zero_shot_eval(client, test_data, model):
     correct = 0
 
-
     for example in test_data:
         print("-", end=" ", flush=True) 
         prompt = format_truthfulqa_example(example['question'], example['choice'])
@@ -68,6 +67,7 @@ def main():
     # Load train and test data 
     train_data = load_truthfulqa('../data/truthfulqa_train.json')
     test_data = load_truthfulqa('../data/truthfulqa_test.json')
+    icm_labels = load_truthfulqa('../data/icm_labels.json')
 
     print(f"Train: {len(train_data)}, Test: {len(test_data)}")
 
@@ -83,7 +83,10 @@ def main():
     print("\n Few shot...")
     accuracy_few_shot = few_shot_eval(client, train_data, test_data, n_examples=25, model=model)
     print(f"Accuracy for few-shot use case: {accuracy_few_shot}")
-
+    
+    print("\n ICM...")
+    accuracy_icm = few_shot_eval(client, icm_labels, test_data, n_examples=25, model=model)
+    print(f"Accuracy for few-shot use case: {accuracy_icm}")
 
 if __name__ == '__main__':
     main()

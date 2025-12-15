@@ -5,14 +5,26 @@ from setup import load_truthfulqa, setup_hyperbolic_client, format_truthfulqa_ex
 
 
 
-def calculate_mutual_predictability(client, labeled_data, model="meta-llama/Meta-Llama-3.1-405B", context_size=20):
+def calculate_mutual_predictability(client, labeled_data, target_indices=None, model="meta-llama/Meta-Llama-3.1-405B", context_size=20, sample_size=16):
     """ Calculate the log probabilities of the labeled data """
     total_score = 0.0 
 
-    for i, target in enumerate(labeled_data):
+    if target_indices is None:
+        target_indices = random.sample(
+            range(len(labeled_data)),
+            min(sample_size, len(labeled_data))
+        )
 
-        other_examples = [ex for j, ex in enumerate(labeled_data) if i!=j] 
-        context_examples = random.sample(other_examples, min(context_size, len(other_examples)))
+    for target_idx in target_indices:
+        if target_idx >= len(labeled_data):
+            continue
+            
+        target = labeled_data[target_idx]
+        
+        # Index-based exclusion
+        other_indices = [i for i in range(len(labeled_data)) if i != target_idx]
+        context_indices = other_indices[:context_size]  # Deterministic
+        context_examples = [labeled_data[i] for i in context_indices]
 
         context = ""
         for ex in context_examples:
@@ -42,6 +54,11 @@ def calculate_mutual_predictability(client, labeled_data, model="meta-llama/Meta
                 break 
 
         total_score += label_logprob
+
+    m = len(target_indices)
+    N = len(labeled_data)
+    if m > 0 and m < N:
+        total_score *= (N / m)
     
     return total_score 
 
@@ -53,11 +70,11 @@ def calculate_inconsistency(labeled_data):
     return 10 if all_same else 0
 
 
-def calculate_score(client, labeled_data, alpha=50, context_size=20):
+def calculate_score(client, labeled_data, target_indices, alpha=50, context_size=20):
     """formula:
         U(D) = alpha * P_B(D) - I(D)  
     """
-    mutual = calculate_mutual_predictability(client, labeled_data, context_size=context_size)
+    mutual = calculate_mutual_predictability(client, labeled_data, target_indices=target_indices, context_size=context_size)
     inconsist = calculate_inconsistency(labeled_data)
     return alpha * mutual - inconsist 
 
@@ -119,8 +136,6 @@ def propose_label(client, example, context_examples, model="meta-llama/Meta-Llam
 
 
 
-
-
 def run_icm(client, unlabeled_data, K=8, max_iterations=256, model="meta-llama/Meta-Llama-3.1-405B"):
     """
     Args:
@@ -178,21 +193,37 @@ def run_icm(client, unlabeled_data, K=8, max_iterations=256, model="meta-llama/M
             new_labeled[idx] = dict(example, label=proposed_label)
         
 
+        # Force early acceptances BEFORE normal logic
+        if iteration < 100 and is_new:
+            labeled_data = new_labeled
+            unlabeled_indices.remove(idx)
+            print(f"Iter {iteration}: Forced Accept | Labeled: {len(labeled_data)}")
+            continue
         # Calculate scores 
-        old_score = calculate_score(client, labeled_data, context_size=20) 
-        new_score = calculate_score(client, new_labeled, context_size=20)
+        sample_size = min(16, len(labeled_data))
+        score_targets = set(random.sample(range(len(labeled_data)), sample_size))
+
+        if not is_new:
+            score_targets.add(idx)
+            if len(score_targets) > sample_size:
+                score_targets.pop()
+        score_targets = list(score_targets)
+
+        old_score = calculate_score(client, labeled_data, target_indices=score_targets, context_size=20) 
+        new_score = calculate_score(client, new_labeled, target_indices=score_targets, context_size=20)
         delta = new_score - old_score 
 
+       
+
+        # Normal accept/reject
         if delta > 0 or random.random() < math.exp(delta / T):
             labeled_data = new_labeled
             if is_new:
                 unlabeled_indices.remove(idx)
-            
-            # if iteration % 20 == 0:
             print(f"Iter {iteration}: Accepted | Score: {new_score:.2f} | Labeled: {len(labeled_data)}")
         else:
-            # if iteration % 20 == 0:
             print(f"Iter {iteration}: Rejected | Score: {old_score:.2f} | Labeled: {len(labeled_data)}")
+
     
     print(f"\nICM complete: {len(labeled_data)}/{len(unlabeled_data)} labeled")
     return labeled_data
@@ -216,7 +247,7 @@ def main():
         client,
         train_data,
         K=8,
-        max_iterations=1,
+        max_iterations=300,
         model="meta-llama/Meta-Llama-3.1-405B"
         )
 
