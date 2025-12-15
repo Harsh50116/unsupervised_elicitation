@@ -1,6 +1,8 @@
 import random
 from setup import load_truthfulqa, setup_hyperbolic_client, format_truthfulqa_example
 
+random.seed(76)
+
 # Zero shot evaluations
 def zero_shot_eval(client, test_data, model):
     correct = 0

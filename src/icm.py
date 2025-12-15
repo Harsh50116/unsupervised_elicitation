@@ -5,7 +5,7 @@ from setup import load_truthfulqa, setup_hyperbolic_client, format_truthfulqa_ex
 
 
 
-def calculate_mutual_predictability(client, labeled_data, target_indices=None, model="meta-llama/Meta-Llama-3.1-405B", context_size=20, sample_size=16):
+def calculate_mutual_predictability(client, labeled_data, target_indices=None, model="meta-llama/Meta-Llama-3.1-405B", context_size=10, sample_size=16):
     """ Calculate the log probabilities of the labeled data """
     total_score = 0.0 
 
@@ -23,7 +23,10 @@ def calculate_mutual_predictability(client, labeled_data, target_indices=None, m
         
         # Index-based exclusion
         other_indices = [i for i in range(len(labeled_data)) if i != target_idx]
-        context_indices = other_indices[:context_size]  # Deterministic
+        # deterministic randomness so old vs new are comparable
+        rng = random.Random(target_idx)  # or pass a seed from run_icm if you prefer
+        context_indices = rng.sample(other_indices, min(context_size, len(other_indices)))
+
         context_examples = [labeled_data[i] for i in context_indices]
 
         context = ""
@@ -56,11 +59,7 @@ def calculate_mutual_predictability(client, labeled_data, target_indices=None, m
         total_score += label_logprob
 
     m = len(target_indices)
-    N = len(labeled_data)
-    if m > 0 and m < N:
-        total_score *= (N / m)
-    
-    return total_score 
+    return (total_score / m) if m > 0 else 0.0 
 
 
 def calculate_inconsistency(labeled_data):
@@ -70,7 +69,7 @@ def calculate_inconsistency(labeled_data):
     return 10 if all_same else 0
 
 
-def calculate_score(client, labeled_data, target_indices, alpha=50, context_size=20):
+def calculate_score(client, labeled_data, target_indices, alpha=50, context_size=10):
     """formula:
         U(D) = alpha * P_B(D) - I(D)  
     """
@@ -79,7 +78,7 @@ def calculate_score(client, labeled_data, target_indices, alpha=50, context_size
     return alpha * mutual - inconsist 
 
 
-def propose_label(client, example, context_examples, model="meta-llama/Meta-Llama-3.1-405B", context_size=20):
+def propose_label(client, example, context_examples, model="meta-llama/Meta-Llama-3.1-405B", context_size=10):
     """
     Args: 
         client: The client to use to make API calls.
@@ -148,6 +147,7 @@ def run_icm(client, unlabeled_data, K=8, max_iterations=256, model="meta-llama/M
 
     labeled_data = []
     random.shuffle(unlabeled_data)
+    sample_size = 8
 
     for i in range(K):
         example = unlabeled_data[i].copy() 
@@ -183,7 +183,7 @@ def run_icm(client, unlabeled_data, K=8, max_iterations=256, model="meta-llama/M
         
         # Propose label 
         context = [ex for ex in labeled_data if ex != example]
-        proposed_label = propose_label(client, example, context, model, context_size=20)
+        proposed_label = propose_label(client, example, context, model, context_size=10)
 
         # Create new dataset with proposed label 
         if is_new:
@@ -193,27 +193,36 @@ def run_icm(client, unlabeled_data, K=8, max_iterations=256, model="meta-llama/M
             new_labeled[idx] = dict(example, label=proposed_label)
         
 
-        # Force early acceptances BEFORE normal logic
-        if iteration < 100 and is_new:
-            labeled_data = new_labeled
-            unlabeled_indices.remove(idx)
-            print(f"Iter {iteration}: Forced Accept | Labeled: {len(labeled_data)}")
-            continue
         # Calculate scores 
-        sample_size = min(16, len(labeled_data))
-        score_targets = set(random.sample(range(len(labeled_data)), sample_size))
+        sample_size = 8
 
-        if not is_new:
-            score_targets.add(idx)
-            if len(score_targets) > sample_size:
-                score_targets.pop()
-        score_targets = list(score_targets)
+        if is_new:
+            # new example sits at the end of new_labeled
+            new_idx = len(new_labeled) - 1
 
-        old_score = calculate_score(client, labeled_data, target_indices=score_targets, context_size=20) 
-        new_score = calculate_score(client, new_labeled, target_indices=score_targets, context_size=20)
-        delta = new_score - old_score 
+            pop_size = min(sample_size, len(new_labeled))
+            score_targets = random.sample(range(len(new_labeled)), pop_size)
 
-       
+            # force include the new example
+            if new_idx not in score_targets:
+                score_targets[0] = new_idx
+
+            old_score = calculate_score(client, labeled_data, target_indices=score_targets, context_size=10)
+            new_score = calculate_score(client, new_labeled, target_indices=score_targets, context_size=10)
+
+        else:
+            pop_size = min(sample_size, len(labeled_data))
+            score_targets = random.sample(range(len(labeled_data)), pop_size)
+
+            # force include idx (the relabeled example)
+            if idx not in score_targets:
+                score_targets[0] = idx
+
+            old_score = calculate_score(client, labeled_data, target_indices=score_targets, context_size=10)
+            new_score = calculate_score(client, new_labeled, target_indices=score_targets, context_size=10)
+
+        delta = new_score - old_score
+
 
         # Normal accept/reject
         if delta > 0 or random.random() < math.exp(delta / T):
@@ -246,8 +255,8 @@ def main():
     labeled_data = run_icm(
         client,
         train_data,
-        K=8,
-        max_iterations=300,
+        K=50,
+        max_iterations=30,
         model="meta-llama/Meta-Llama-3.1-405B"
         )
 
