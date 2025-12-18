@@ -41,5 +41,6 @@ data/
 
 # ThoughtProcess 
 .txt/
-.brainstorm.txt
+brainstorm.txt
 
+*.pdf

@@ -5,7 +5,7 @@ from setup import load_truthfulqa, setup_hyperbolic_client, format_truthfulqa_ex
 
 
 
-def calculate_mutual_predictability(client, labeled_data, target_indices=None, model="meta-llama/Meta-Llama-3.1-405B", context_size=10, sample_size=16):
+def calculate_mutual_predictability(client, labeled_data, target_indices=None, model="meta-llama/Meta-Llama-3.1-405B", context_size=10, sample_size=8):
     """ Calculate the log probabilities of the labeled data """
     total_score = 0.0 
 
@@ -255,8 +255,8 @@ def main():
     labeled_data = run_icm(
         client,
         train_data,
-        K=50,
-        max_iterations=30,
+        K=8,
+        max_iterations=256,
         model="meta-llama/Meta-Llama-3.1-405B"
         )
 
